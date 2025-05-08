@@ -494,6 +494,301 @@ with open(f"{results_dir}/msi_l_analysis_report.txt", 'w', encoding='utf-8') as 
 
 print("MSI-L亚型分类优化分析完成!")
 
+
+# ===== 增强可视化方案 =====
+print("生成模型性能综合可视化...")
+
+# 1. 模型性能比较柱状图
+plt.figure(figsize=(14, 8))
+
+# 总体准确率比较
+model_names = list(models.keys())
+accuracies = []
+msi_l_f1_scores = []
+msi_l_recalls = []
+msi_l_precisions = []
+
+for name, model in models.items():
+    y_pred_model = model.predict(X_test_scaled)
+    acc = accuracy_score(y_test, y_pred_model)
+    accuracies.append(acc)
+    
+    # 获取MSI-L的指标
+    precision, recall, f1, _ = precision_recall_fscore_support(y_test, y_pred_model, average=None, labels=model.classes_)
+    msi_l_idx = list(model.classes_).index('MSI-L')
+    msi_l_precisions.append(precision[msi_l_idx])
+    msi_l_recalls.append(recall[msi_l_idx])
+    msi_l_f1_scores.append(f1[msi_l_idx])
+
+# 创建并列柱状图
+x = np.arange(len(model_names))
+width = 0.2
+
+fig, ax = plt.subplots(figsize=(14, 8))
+rects1 = ax.bar(x - width*1.5, accuracies, width, label='总体准确率', color='skyblue')
+rects2 = ax.bar(x - width/2, msi_l_precisions, width, label='MSI-L精确率', color='lightgreen')
+rects3 = ax.bar(x + width/2, msi_l_recalls, width, label='MSI-L召回率', color='salmon')
+rects4 = ax.bar(x + width*1.5, msi_l_f1_scores, width, label='MSI-L F1分数', color='purple')
+
+# 添加文本标注
+def add_labels(rects):
+    for rect in rects:
+        height = rect.get_height()
+        ax.annotate(f'{height:.2f}',
+                    xy=(rect.get_x() + rect.get_width() / 2, height),
+                    xytext=(0, 3),  # 3点垂直偏移
+                    textcoords="offset points",
+                    ha='center', va='bottom', fontsize=9)
+
+add_labels(rects1)
+add_labels(rects2)
+add_labels(rects3)
+add_labels(rects4)
+
+ax.set_ylabel('得分')
+ax.set_title('各模型性能指标比较')
+ax.set_xticks(x)
+ax.set_xticklabels(model_names)
+ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
+ax.set_ylim(0, 1.1)  # 设置y轴范围
+plt.grid(axis='y', linestyle='--', alpha=0.7)
+plt.tight_layout()
+plt.savefig(f"{results_dir}/model_performance_comparison.png", dpi=300)
+plt.close()
+
+# 2. 所有模型的混淆矩阵拼图
+plt.figure(figsize=(20, 15))
+for i, (name, model) in enumerate(models.items(), 1):
+    y_pred_model = model.predict(X_test_scaled)
+    conf_mat = confusion_matrix(y_test, y_pred_model, labels=model.classes_)
+    
+    # 计算百分比混淆矩阵
+    conf_mat_percent = conf_mat.astype('float') / conf_mat.sum(axis=1)[:, np.newaxis]
+    
+    plt.subplot(2, 2, i)
+    sns.heatmap(conf_mat_percent, annot=conf_mat, fmt='d', cmap='Blues',
+                xticklabels=model.classes_, yticklabels=model.classes_,
+                annot_kws={"size": 12})
+    plt.xlabel('预测标签')
+    plt.ylabel('真实标签')
+    plt.title(f'{name} - 混淆矩阵 (数字:样本数, 颜色:行百分比)')
+
+plt.tight_layout()
+plt.savefig(f"{results_dir}/all_models_confusion_matrices.png", dpi=300)
+plt.close()
+
+# 3. 每类样本的分类正确率雷达图
+from matplotlib.path import Path
+from matplotlib.patches import PathPatch, Circle
+
+fig = plt.figure(figsize=(12, 10))
+ax = fig.add_subplot(111, polar=True)
+
+# 计算每个模型对每个亚型的分类准确率
+classes = list(np.unique(y_test))
+n_classes = len(classes)
+class_accuracy = {}
+
+for name, model in models.items():
+    y_pred_model = model.predict(X_test_scaled)
+    accuracies = []
+    
+    for cls in classes:
+        mask = y_test == cls
+        if mask.sum() > 0:  # 防止除以零
+            cls_acc = accuracy_score(y_test[mask], y_pred_model[mask.values])
+            accuracies.append(cls_acc)
+        else:
+            accuracies.append(0)
+    
+    class_accuracy[name] = accuracies
+
+# 设置角度
+angles = np.linspace(0, 2*np.pi, n_classes, endpoint=False).tolist()
+angles += angles[:1]  # 闭合图形
+
+# 绘制雷达图
+colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
+for i, (name, accs) in enumerate(class_accuracy.items()):
+    accs_plot = accs + accs[:1]  # 闭合数据
+    ax.plot(angles, accs_plot, 'o-', linewidth=2, label=name, color=colors[i])
+    ax.fill(angles, accs_plot, alpha=0.1, color=colors[i])
+
+# 设置刻度和标签
+ax.set_xticks(angles[:-1])
+ax.set_xticklabels(classes)
+ax.set_yticks([0.2, 0.4, 0.6, 0.8, 1.0])
+ax.set_yticklabels(['20%', '40%', '60%', '80%', '100%'])
+ax.set_ylim(0, 1)
+
+# 添加网格和图例
+plt.grid(True, linestyle='--', alpha=0.7)
+plt.title('各模型在不同亚型上的分类准确率', size=15)
+plt.legend(loc='upper right', bbox_to_anchor=(0.1, 0.1))
+plt.tight_layout()
+plt.savefig(f"{results_dir}/subtype_accuracy_radar.png", dpi=300)
+plt.close()
+
+# 4. MSI-L样本分类结果的三维可视化
+from mpl_toolkits.mplot3d import Axes3D
+from sklearn.decomposition import PCA
+
+# 使用PCA降到3维
+pca_3d = PCA(n_components=3)
+X_test_pca_3d = pca_3d.fit_transform(X_test_scaled)
+
+fig = plt.figure(figsize=(15, 12))
+ax = fig.add_subplot(111, projection='3d')
+
+# 绘制所有测试样本
+for label in np.unique(y_test):
+    mask = y_test == label
+    ax.scatter(
+        X_test_pca_3d[mask.values, 0],
+        X_test_pca_3d[mask.values, 1],
+        X_test_pca_3d[mask.values, 2],
+        alpha=0.5,
+        label=f'{label}',
+        s=80 if label == 'MSI-L' else 40
+    )
+
+# 高亮显示MSI-L样本及其分类结果
+msi_l_mask = (y_test == 'MSI-L').values
+msi_l_correct = (y_test == 'MSI-L').values & (y_test.values == y_pred)
+msi_l_incorrect = (y_test == 'MSI-L').values & (y_test.values != y_pred)
+
+# 绘制正确分类的MSI-L样本
+if np.any(msi_l_correct):
+    ax.scatter(
+        X_test_pca_3d[msi_l_correct, 0],
+        X_test_pca_3d[msi_l_correct, 1],
+        X_test_pca_3d[msi_l_correct, 2],
+        color='green',
+        marker='*',
+        s=200,
+        edgecolors='black',
+        linewidths=1.5,
+        label='MSI-L正确分类'
+    )
+
+# 绘制错误分类的MSI-L样本
+if np.any(msi_l_incorrect):
+    ax.scatter(
+        X_test_pca_3d[msi_l_incorrect, 0],
+        X_test_pca_3d[msi_l_incorrect, 1],
+        X_test_pca_3d[msi_l_incorrect, 2],
+        color='red',
+        marker='X',
+        s=200,
+        edgecolors='black',
+        linewidths=1.5,
+        label='MSI-L错误分类'
+    )
+
+# 添加标签和图例
+ax.set_xlabel('PCA 主成分 1')
+ax.set_ylabel('PCA 主成分 2')
+ax.set_zlabel('PCA 主成分 3')
+ax.set_title('胃癌亚型3D PCA可视化 (聚焦MSI-L分类结果)', fontsize=15)
+plt.legend(bbox_to_anchor=(1.1, 1))
+plt.tight_layout()
+plt.savefig(f"{results_dir}/msi_l_classification_3d_pca.png", dpi=300)
+plt.close()
+
+# 5. 生成学习曲线
+from sklearn.model_selection import learning_curve
+
+# 选取表现最好的模型进行学习曲线分析
+best_model_name = model_names[np.argmax(accuracies)]
+best_model = models[best_model_name]
+
+plt.figure(figsize=(14, 6))
+
+# 设置训练集大小
+train_sizes = np.linspace(0.1, 1.0, 10)
+
+# 计算学习曲线
+for i, (name, model) in enumerate([("Random Forest", best_rf), ("SVM", best_svm)]):
+    train_sizes_abs, train_scores, test_scores = learning_curve(
+        model, X_train_scaled, y_train_resampled, 
+        train_sizes=train_sizes,
+        cv=StratifiedKFold(5),
+        scoring='balanced_accuracy',
+        n_jobs=-1
+    )
+    
+    # 计算均值和标准差
+    train_mean = np.mean(train_scores, axis=1)
+    train_std = np.std(train_scores, axis=1)
+    test_mean = np.mean(test_scores, axis=1)
+    test_std = np.std(test_scores, axis=1)
+    
+    # 绘制学习曲线
+    plt.subplot(1, 2, i+1)
+    plt.grid(True, alpha=0.3)
+    plt.fill_between(train_sizes_abs, train_mean - train_std, train_mean + train_std, alpha=0.1, color="r")
+    plt.fill_between(train_sizes_abs, test_mean - test_std, test_mean + test_std, alpha=0.1, color="g")
+    plt.plot(train_sizes_abs, train_mean, 'o-', color="r", label="训练集得分")
+    plt.plot(train_sizes_abs, test_mean, 'o-', color="g", label="验证集得分")
+    plt.title(f"{name}模型学习曲线")
+    plt.xlabel("训练样本数")
+    plt.ylabel("平衡准确率")
+    plt.ylim(0.5, 1.01)
+    plt.legend(loc="best")
+
+plt.tight_layout()
+plt.savefig(f"{results_dir}/learning_curves.png", dpi=300)
+plt.close()
+
+# 7. MSI-L样本概率分布图
+plt.figure(figsize=(14, 8))
+
+# 获取MSI-L样本的索引
+msi_l_indices = np.where(y_test.values == 'MSI-L')[0]
+
+# 对于每个模型，获取MSI-L样本的预测概率
+for i, (name, model) in enumerate(models.items()):
+    if hasattr(model, "predict_proba"):
+        proba = model.predict_proba(X_test_scaled)
+        msi_l_class_idx = np.where(model.classes_ == 'MSI-L')[0][0]
+        
+        # 提取MSI-L样本的预测概率
+        msi_l_probs = proba[msi_l_indices, msi_l_class_idx]
+        
+        # 对样本按概率排序
+        sorted_indices = np.argsort(msi_l_probs)
+        sorted_probs = msi_l_probs[sorted_indices]
+        sorted_sample_ids = np.array(y_test.index)[msi_l_indices][sorted_indices]
+        
+        # 计算正确与错误
+        predictions = model.predict(X_test_scaled)
+        correct_pred = (predictions[msi_l_indices] == 'MSI-L')
+        sorted_correct = correct_pred[sorted_indices]
+        
+        # 绘制概率条形图
+        plt.subplot(2, 2, i+1)
+        bars = plt.barh(range(len(sorted_probs)), sorted_probs, color=['green' if c else 'red' for c in sorted_correct])
+        
+        # 添加样本ID标签
+        for j, (prob, correct) in enumerate(zip(sorted_probs, sorted_correct)):
+            plt.text(max(0.01, prob - 0.25), j, f"{sorted_sample_ids[j][-6:]}", 
+                    va='center', ha='right', color='black', fontsize=8)
+        
+        # 添加阈值线
+        plt.axvline(x=0.5, color='black', linestyle='--', alpha=0.7)
+        
+        plt.title(f"{name} - MSI-L样本预测概率")
+        plt.xlabel('预测为MSI-L的概率')
+        plt.ylabel('样本')
+        plt.xlim(0, 1)
+        plt.yticks([])  # 隐藏y轴刻度
+
+plt.tight_layout()
+plt.savefig(f"{results_dir}/msi_l_probability_distribution.png", dpi=300)
+plt.close()
+
+print("增强可视化方案已完成!")
+
 # 计算运行时间
 end_time = datetime.now()
 execution_time = end_time - start_time
